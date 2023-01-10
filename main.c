@@ -10,7 +10,7 @@
 *
 ******************************************************************************
 *
-* Copyright (c) 2015-2021, Infineon Technologies AG
+* Copyright (c) 2015-2022, Infineon Technologies AG
 * All rights reserved.                        
 *                                             
 * Boost Software License - Version 1.0 - August 17th, 2003
@@ -41,8 +41,8 @@
 
 #include "cybsp.h"
 #include "cy_utils.h"
-#include "xmc_spi.h"
-#include "interface.h"
+#include <stdio.h>
+#include "cy_retarget_io.h"
 
 /*******************************************************************************
 * Defines
@@ -52,68 +52,19 @@
 #define TICKS_PER_SECOND       (1000u)
 #define TICKS_WAIT             (1000u)
 
-#ifdef TARGET_KIT_XMC47_RELAX_V1
+/* Define macro to enable/disable printing of debug messages */
+#define ENABLE_XMC_DEBUG_PRINT (0)
 
-/* SPI1 Channel 0 */
-#define SPI_MODULE_CH0         XMC_SPI1_CH0           
-
-/* SPI Channel Input Stage */
-#define SPI_DIN_STAGE          XMC_SPI_CH_INPUT_DIN0  
-
-/* MISO input source */
-#define SPI_DIN_INPUT_SOURCE   USIC1_C0_DX0_P0_4      
-
-/* MOSI Pin drive mode */
-#define SPI_MOSI_DRV_MODE      XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT2
-
-/* Slave Select Pin drive mode */
-#define SPI_SEL0_DRV_MODE      XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT2
-
-/* Clock Pin drive mode */
-#define SPI_SCLKOUT_DRV_MODE   XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT2
-
-#endif
-
-#ifdef TARGET_KIT_XMC14_BOOT_001
-
-/* Defines SPI1 Channel 0 */
-#define SPI_MODULE_CH0         XMC_SPI0_CH0
-
-/* Defines SPI Channel Input Stage */
-#define SPI_DIN_STAGE          XMC_SPI_CH_INPUT_DIN0 
-
-/* Defines MISO input source */
-#define SPI_DIN_INPUT_SOURCE   USIC0_C0_DX0_P2_0
-
-/* MOSI Pin drive mode */ 
-#define SPI_MOSI_DRV_MODE      XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT7
-
-/* Slave Select Pin drive mode */
-#define SPI_SEL0_DRV_MODE      XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT6
-
-/* Clock Pin drive mode */
-#define SPI_SCLKOUT_DRV_MODE   XMC_GPIO_MODE_OUTPUT_PUSH_PULL | XMC_GPIO_MODE_OUTPUT_ALT6
-
+/* Define macro to check if loop is entered once */
+#if ENABLE_XMC_DEBUG_PRINT
+static bool ENTER_LOOP = false;
+static uint8_t LOOP_NUM = 0;
 #endif
 
 /* Declaration of array to store the message to be transmitted */
-const uint8_t data[3] = {0x84, 0xF, 0x84};
+const uint8_t data[3] = {0x84, 0x0F, 0x84};
 
-/* Configuration of SPI */
-XMC_SPI_CH_CONFIG_t spi_config =
-{   
-    /* Baud Rate Configurations */
-    .baudrate = 1000000U,
 
-    /* Defines the SPI bus mode */
-    .bus_mode = XMC_SPI_CH_BUS_MODE_MASTER,     
-    
-    /* Defines the Polarity of the slave select signals */
-    .selo_inversion = XMC_SPI_CH_SLAVE_SEL_INV_TO_MSLS,   
-    
-    /* Defines the Parity of the USIC channel */
-    .parity_mode = XMC_USIC_CH_PARITY_MODE_NONE           
-};
 
 /*******************************************************************************
 * Function Name: SysTick_Handler
@@ -139,21 +90,23 @@ void SysTick_Handler(void)
     if (ticks == TICKS_WAIT)
     {
         /* Enable the selected slave Select line 0 */
-        XMC_SPI_CH_EnableSlaveSelect(SPI_MODULE_CH0, XMC_SPI_CH_SLAVE_SELECT_0);
-
+        XMC_SPI_CH_EnableSlaveSelect(SPI0_HW, XMC_SPI_CH_SLAVE_SELECT_0);
         /* Sending 3 messages from data array */
         while(i < 3)
         {
-            XMC_SPI_CH_Transmit(SPI_MODULE_CH0, data[i++], XMC_SPI_CH_MODE_STANDARD);
-            while((XMC_SPI_CH_GetStatusFlag(SPI_MODULE_CH0) & XMC_SPI_CH_STATUS_FLAG_TRANSMIT_SHIFT_INDICATION) == 0U);
-            XMC_SPI_CH_ClearStatusFlag(SPI_MODULE_CH0, XMC_SPI_CH_STATUS_FLAG_TRANSMIT_SHIFT_INDICATION);
+            XMC_SPI_CH_Transmit(SPI0_HW, data[i++], XMC_SPI_CH_MODE_STANDARD);
+            while((XMC_SPI_CH_GetStatusFlag(SPI0_HW) & XMC_SPI_CH_STATUS_FLAG_TRANSMIT_SHIFT_INDICATION) == 0U);
+            XMC_SPI_CH_ClearStatusFlag(SPI0_HW, XMC_SPI_CH_STATUS_FLAG_TRANSMIT_SHIFT_INDICATION);
         }
-
         /* Transfer completed successfully. Toggle the LED */
         XMC_GPIO_ToggleOutput(CYBSP_USER_LED1_PORT, CYBSP_USER_LED1_PIN);
 
         /* Disable Slave Select line */
-        XMC_SPI_CH_DisableSlaveSelect( SPI_MODULE_CH0 );
+        XMC_SPI_CH_DisableSlaveSelect( SPI0_HW );
+
+        #if ENABLE_XMC_DEBUG_PRINT
+        ENTER_LOOP = true;
+        #endif
 
         ticks = 0;
     }
@@ -173,6 +126,7 @@ void SysTick_Handler(void)
  *  int
  *
 *******************************************************************************/
+
 int main(void)
 {
     cy_rslt_t result;
@@ -185,24 +139,29 @@ int main(void)
         CY_ASSERT(0);
     }
 
-    /* Initialize and Start SPI */
-    XMC_SPI_CH_Init(SPI_MODULE_CH0, &spi_config);
 
-    /* Configures different SPI Port Pins */
-    XMC_GPIO_SetMode(SPIM_MOSI_PORT, SPIM_MOSI_PIN, SPI_MOSI_DRV_MODE);
-    XMC_GPIO_SetMode(SPIM_SEL0_PORT, SPIM_SEL0_PIN, SPI_SEL0_DRV_MODE);
-    XMC_GPIO_SetMode(SPIM_SCLKOUT_PORT, SPIM_SCLKOUT_PIN, SPI_SCLKOUT_DRV_MODE);
+    cy_retarget_io_init(CYBSP_DEBUG_UART_HW);
 
-    /* Selects the data source for SPI input stage */
-    XMC_SPI_CH_SetInputSource(SPI_MODULE_CH0, SPI_DIN_STAGE, SPI_DIN_INPUT_SOURCE);
+    #if ENABLE_XMC_DEBUG_PRINT
+    printf("Initialization done\r\n");
+    #endif
 
     /* Start the SPI Channel */
-    XMC_SPI_CH_Start( SPI_MODULE_CH0 );
+    XMC_SPI_CH_Start( SPI0_HW );
 
     /* System timer configuration */
     SysTick_Config(SystemCoreClock / TICKS_PER_SECOND);
 
-    while(1);
+    while(1)
+    {
+        #if ENABLE_XMC_DEBUG_PRINT
+        if(ENTER_LOOP && LOOP_NUM == 0)
+        {
+            printf("Data sent\r\n");
+            LOOP_NUM++;
+        }
+        #endif
+    }
 }
 
 /* [] END OF FILE */
